@@ -42,16 +42,17 @@ private:
     uint8_t ledPin;
   };
 
-  static constexpr uint8_t ledOneMask = 0b001;
-  static constexpr uint8_t ledTwoMask = 0b010;
-  static constexpr uint8_t ledThreeMask = 0b100;
+  static constexpr uint8_t allLedOffMask = 0x00;
+  static constexpr uint8_t ledOneMask = 0x01;
+  static constexpr uint8_t ledTwoMask = 0x02;
+  static constexpr uint8_t ledThreeMask = 0x04;
 
   static constexpr uint8_t MaskCool = ledOneMask;
   static constexpr uint8_t MaskCoolSave = ledOneMask | ledThreeMask;
   static constexpr uint8_t MaskHeat = ledTwoMask;
   static constexpr uint8_t MaskHeatSave = ledTwoMask | ledThreeMask;
   static constexpr uint8_t MaskDry = ledThreeMask;
-  static constexpr uint8_t MaskFan = ledThreeMask;
+  static constexpr uint8_t MaskFan = allLedOffMask;  // Fan mode = no LEDs
   static constexpr uint8_t MaskAutoCool = ledOneMask;
   static constexpr uint8_t MaskAutoHeat = ledTwoMask;
 
@@ -67,7 +68,6 @@ private:
   uint8_t ledThree;
   std::array<ErrorPattern, 20> errorPatterns;
 
-  void turnOffAll();
   void turnOnMask(uint8_t mask);
   inline void writeLed(uint8_t pin, LedState ledState) const;
 };
@@ -82,7 +82,7 @@ LEDDisplay<Polarity>::LEDDisplay(uint8_t ledOnePin, uint8_t ledTwoPin, uint8_t l
   pinMode(ledTwo, OUTPUT);
   pinMode(ledThree, OUTPUT);
 
-  turnOffAll();
+  turnOnMask(allLedOffMask);
 }
 
 template<ActivePolarity Polarity>
@@ -94,20 +94,16 @@ void LEDDisplay<Polarity>::writeLed(uint8_t pin, LedState ledState) const {
 }
 
 template<ActivePolarity Polarity>
-void LEDDisplay<Polarity>::turnOffAll() {
-  writeLed(ledOne, LedState::ledOff);
-  writeLed(ledTwo, LedState::ledOff);
-  writeLed(ledThree, LedState::ledOff);
-}
-
-template<ActivePolarity Polarity>
 void LEDDisplay<Polarity>::turnOnMask(uint8_t mask) {
-
-  turnOffAll();
-  
-  if (mask & ledOneMask) writeLed(ledOne, LedState::ledOn);
-  if (mask & ledTwoMask) writeLed(ledTwo, LedState::ledOn);
-  if (mask & ledThreeMask) writeLed(ledThree, LedState::ledOn);
+  writeLed(ledOne, (mask & ledOneMask)
+                     ? LedState::ledOn
+                     : LedState::ledOff);
+  writeLed(ledTwo, (mask & ledTwoMask)
+                     ? LedState::ledOn
+                     : LedState::ledOff);
+  writeLed(ledThree, (mask & ledThreeMask)
+                       ? LedState::ledOn
+                       : LedState::ledOff);
 }
 
 // ===== Public API =====
@@ -119,14 +115,12 @@ void LEDDisplay<Polarity>::showMode(LEDDisplay<Polarity>::Mode mode, bool saving
     if (mode == Mode::Cool) mask = MaskCoolSave;
     if (mode == Mode::Heat) mask = MaskHeatSave;
   }
-  
+
   turnOnMask(mask);
 }
 
 template<ActivePolarity Polarity>
 void LEDDisplay<Polarity>::showError(int errorNo) {
-  turnOffAll();
-
   for (auto& p : errorPatterns) {
     if (p.errorNo == errorNo) {
       for (int i = 0; i < p.blinks; i++) {
