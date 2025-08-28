@@ -33,8 +33,6 @@ public:
 
   void showMode(Mode mode, bool saving);
   void showError(int errorNo);
-  void enable();
-  void disable();
 
 private:
 
@@ -208,14 +206,6 @@ LEDDisplay<Polarity>::~LEDDisplay() {
     xTimerDelete(errorData.blinkTimer, 0);
     errorData.blinkTimer = nullptr;
   }
-}
-
-template<ActivePolarity Polarity>
-void LEDDisplay<Polarity>::enable() {
-}
-
-template<ActivePolarity Polarity>
-void LEDDisplay<Polarity>::disable() {
 }
 
 #endif

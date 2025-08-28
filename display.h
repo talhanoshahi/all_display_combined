@@ -10,6 +10,7 @@ struct DisplayTraits {
   static constexpr bool hasTemperature = false;
   static constexpr bool hasMode = false;
   static constexpr bool hasError = false;
+  static constexpr bool hasBacklight = false;
 };
 
 template<>
@@ -17,6 +18,7 @@ struct DisplayTraits<SevenSegmentDisplay> {
   static constexpr bool hasTemperature = true;
   static constexpr bool hasMode = true;
   static constexpr bool hasError = true;  // if SevenSegmentDisplay doesn't support errors
+  static constexpr bool hasBacklight = true;
 };
 
 template<>
@@ -24,6 +26,7 @@ struct DisplayTraits<LCDDisplay> {
   static constexpr bool hasTemperature = true;
   static constexpr bool hasMode = false;
   static constexpr bool hasError = true;
+  static constexpr bool hasBacklight = true;
 };
 
 template<ActivePolarity Polarity>
@@ -31,12 +34,14 @@ struct DisplayTraits<LEDDisplay<Polarity>> {
   static constexpr bool hasTemperature = false;
   static constexpr bool hasMode = true;
   static constexpr bool hasError = true;
+  static constexpr bool hasBacklight = false;
 };
 
 template<typename DisplayType>
 class Display {
 public:
   DisplayType display;
+  static constexpr bool hasBacklight = DisplayTraits<DisplayType>::hasBacklight;
 
   template<typename... Args>
   Display(Args&&... args)
@@ -62,11 +67,15 @@ public:
   }
 
   inline void enable() {
-    display.enable();
+    if constexpr (DisplayTraits<DisplayType>::hasBacklight) {
+      display.enable();
+    }
   }
 
   inline void disable() {
-    display.disable();
+    if constexpr (DisplayTraits<DisplayType>::hasBacklight) {
+      display.disable();
+    }
   }
 };
 
