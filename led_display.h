@@ -45,9 +45,10 @@ private:
       H
     };
 
-    static const uint32_t NORMAL_BLINK_DELAY = 500000;
-    static const uint32_t LONG_BLINK_DELAY = 1000000;
-    esp_timer_handle_t blinkTimer = nullptr;
+    static const TickType_t NORMAL_BLINK_DELAY = pdMS_TO_TICKS(500);
+    static const TickType_t LONG_BLINK_DELAY = pdMS_TO_TICKS(1500);
+
+    TimerHandle_t blinkTimer = nullptr;
     std::array<uint8_t, 3> errorLedsPins;
     uint8_t totalBlinks = 0;
     uint8_t blinkCount = 0;
@@ -56,7 +57,7 @@ private:
 
     LEDDisplay<Polarity>* parent = nullptr;
 
-    static void blinkCallback(void* arg);
+    static void blinkCallback(TimerHandle_t xTimer);
     void handleBlink();
   };
 
@@ -100,13 +101,13 @@ LEDDisplay<Polarity>::LEDDisplay(uint8_t ledOnePin, uint8_t ledTwoPin, uint8_t l
   errorData.parent = this;
   errorData.errorLedsPins = { ledThree, ledTwo, ledOne };
 
-  esp_timer_create_args_t timer_args = {};
-  timer_args.callback = &ErrorStruct::blinkCallback;
-  timer_args.arg = &errorData;
-  timer_args.dispatch_method = ESP_TIMER_TASK;
-  timer_args.name = "led_blink";
-
-  esp_timer_create(&timer_args, &errorData.blinkTimer);
+  // Create FreeRTOS timer (auto-reload disabled; we’ll restart it manually)
+  errorData.blinkTimer = xTimerCreate(
+    "led_blink",
+    ErrorStruct::LONG_BLINK_DELAY,
+    pdFALSE,     // one-shot, we control restarts
+    &errorData,  // timer ID (passed to callback)
+    &ErrorStruct::blinkCallback);
 }
 
 template<ActivePolarity Polarity>
@@ -147,7 +148,8 @@ void LEDDisplay<Polarity>::showMode(LEDDisplay<Polarity>::Mode mode, bool saving
 template<ActivePolarity Polarity>
 void LEDDisplay<Polarity>::showError(int errorNo) {
   ledTurnOnMask(allLedOffMask);
-  if (esp_timer_is_active(errorData.blinkTimer)) esp_timer_stop(errorData.blinkTimer);
+  if (xTimerIsTimerActive(errorData.blinkTimer))
+    xTimerStop(errorData.blinkTimer, 0);
 
   if (errorNo < 0 && errorData.totalBlinks > 0) {
     errorData.totalBlinks = 0;
@@ -165,14 +167,12 @@ void LEDDisplay<Polarity>::showError(int errorNo) {
   if (idx >= errorData.errorLedsPins.size()) idx = 0;
   errorData.errorLed = errorData.errorLedsPins[idx];
 
-  esp_timer_start_once(errorData.blinkTimer, ErrorStruct::LONG_BLINK_DELAY);
+  xTimerChangePeriod(errorData.blinkTimer, ErrorStruct::LONG_BLINK_DELAY, 0);
 }
 
 template<ActivePolarity Polarity>
-void LEDDisplay<Polarity>::ErrorStruct::blinkCallback(void* arg) {
-  auto* self = static_cast<ErrorStruct*>(arg);
-  
-  Serial.println("Calling handle blink");
+void LEDDisplay<Polarity>::ErrorStruct::blinkCallback(TimerHandle_t xTimer) {
+  auto* self = static_cast<ErrorStruct*>(pvTimerGetTimerID(xTimer));
   self->handleBlink();
 }
 
@@ -187,28 +187,25 @@ void LEDDisplay<Polarity>::ErrorStruct::handleBlink() {
   parent->writeLed(errorLed,
                    errorLedState);
 
-  if (blinkCount == 0 && errorLedState == LedState::ledOn) {
-    esp_timer_stop(blinkTimer);
-    esp_timer_start_periodic(blinkTimer, ErrorStruct::NORMAL_BLINK_DELAY);
-    return;
-  }
-
   if (errorLedState == LedState::ledOff) {
     blinkCount++;
 
     if (blinkCount >= totalBlinks) {
       blinkCount = 0;
-      esp_timer_stop(blinkTimer);
-      esp_timer_start_once(blinkTimer, ErrorStruct::LONG_BLINK_DELAY);
+      xTimerChangePeriod(blinkTimer, LONG_BLINK_DELAY, 0);
+
+      return;
     }
   }
+
+  xTimerChangePeriod(blinkTimer, NORMAL_BLINK_DELAY, 0);
 }
 
 template<ActivePolarity Polarity>
 LEDDisplay<Polarity>::~LEDDisplay() {
   if (errorData.blinkTimer) {
-    esp_timer_stop(errorData.blinkTimer);    // ensure stopped
-    esp_timer_delete(errorData.blinkTimer);  // free resources
+    xTimerStop(errorData.blinkTimer, 0);
+    xTimerDelete(errorData.blinkTimer, 0);
     errorData.blinkTimer = nullptr;
   }
 }
