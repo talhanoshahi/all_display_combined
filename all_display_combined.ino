@@ -70,19 +70,20 @@ Display<LEDDisplay<ActivePolarity::activeLow>> led(1, 2, 3);
 
 void setup() {
   Serial.begin(912600);
+  led.showError(13);
 }
 
 void loop() {
-  led.enable();
-  led.showTemperature(19);
-  led.showMode(1, 0);
+  // led.enable();
+  // led.showTemperature(19);
+  // led.showMode(1, 0);
 
-  delay(3000);
+  // delay(3000);
 
-  led.showError(13);
+  // led.showError(13);
 
-  delay(3000);
-  led.disable();
+  // delay(3000);
+  // led.disable();
 
-  delay(2000);
+  // delay(2000);
 }

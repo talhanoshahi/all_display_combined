@@ -29,6 +29,7 @@ public:
   };
 
   LEDDisplay(uint8_t ledOnePin, uint8_t ledTwoPin, uint8_t ledThreePin);
+  ~LEDDisplay();
 
   void showMode(Mode mode, bool saving);
   void showError(int errorNo);
@@ -36,10 +37,27 @@ public:
   void disable();
 
 private:
-  struct ErrorPattern {
-    int errorNo;
-    uint8_t blinks;
-    uint8_t ledPin;
+
+  struct ErrorStruct {
+    enum class ErrorClass {
+      E,
+      F,
+      H
+    };
+
+    static const uint32_t NORMAL_BLINK_DELAY = 500000;
+    static const uint32_t LONG_BLINK_DELAY = 1000000;
+    esp_timer_handle_t blinkTimer = nullptr;
+    std::array<uint8_t, 3> errorLedsPins;
+    uint8_t totalBlinks = 0;
+    uint8_t blinkCount = 0;
+    LedState errorLedState = LedState::ledOff;
+    uint8_t errorLed = 0;
+
+    LEDDisplay<Polarity>* parent = nullptr;
+
+    static void blinkCallback(void* arg);
+    void handleBlink();
   };
 
   static constexpr uint8_t allLedOffMask = 0x00;
@@ -60,29 +78,35 @@ private:
     MaskCool, MaskHeat, MaskDry, MaskFan, MaskAutoCool, MaskAutoHeat
   };
 
-  static constexpr uint32_t blinkDelay = 500;
-  static constexpr uint32_t errorDelay = 1000;
-
   uint8_t ledOne;
   uint8_t ledTwo;
   uint8_t ledThree;
-  std::array<ErrorPattern, 20> errorPatterns;
 
-  void turnOnMask(uint8_t mask);
+  ErrorStruct errorData;
+
+  void ledTurnOnMask(uint8_t mask);
   inline void writeLed(uint8_t pin, LedState ledState) const;
 };
 
 template<ActivePolarity Polarity>
 LEDDisplay<Polarity>::LEDDisplay(uint8_t ledOnePin, uint8_t ledTwoPin, uint8_t ledThreePin)
-  : ledOne(ledOnePin), ledTwo(ledTwoPin), ledThree(ledThreePin),
-
-    errorPatterns{ { { 0, 1, ledThreePin }, { 1, 2, ledThreePin }, { 2, 3, ledThreePin }, { 3, 4, ledThreePin }, { 4, 5, ledThreePin }, { 5, 6, ledThreePin }, { 10, 1, ledTwoPin }, { 11, 2, ledTwoPin }, { 12, 3, ledTwoPin }, { 13, 4, ledTwoPin }, { 14, 5, ledTwoPin }, { 15, 6, ledTwoPin }, { 16, 1, ledOnePin }, { 20, 7, ledOnePin }, { 21, 2, ledOnePin }, { 22, 6, ledOnePin }, { 23, 4, ledOnePin }, { 24, 5, ledOnePin }, { 25, 3, ledOnePin }, { 29, 8, ledOnePin } } } {
-
+  : ledOne(ledOnePin), ledTwo(ledTwoPin), ledThree(ledThreePin) {
   pinMode(ledOne, OUTPUT);
   pinMode(ledTwo, OUTPUT);
   pinMode(ledThree, OUTPUT);
 
-  turnOnMask(allLedOffMask);
+  ledTurnOnMask(allLedOffMask);
+
+  errorData.parent = this;
+  errorData.errorLedsPins = { ledThree, ledTwo, ledOne };
+
+  esp_timer_create_args_t timer_args = {};
+  timer_args.callback = &ErrorStruct::blinkCallback;
+  timer_args.arg = &errorData;
+  timer_args.dispatch_method = ESP_TIMER_TASK;
+  timer_args.name = "led_blink";
+
+  esp_timer_create(&timer_args, &errorData.blinkTimer);
 }
 
 template<ActivePolarity Polarity>
@@ -94,7 +118,7 @@ void LEDDisplay<Polarity>::writeLed(uint8_t pin, LedState ledState) const {
 }
 
 template<ActivePolarity Polarity>
-void LEDDisplay<Polarity>::turnOnMask(uint8_t mask) {
+void LEDDisplay<Polarity>::ledTurnOnMask(uint8_t mask) {
   writeLed(ledOne, (mask & ledOneMask)
                      ? LedState::ledOn
                      : LedState::ledOff);
@@ -109,6 +133,7 @@ void LEDDisplay<Polarity>::turnOnMask(uint8_t mask) {
 // ===== Public API =====
 template<ActivePolarity Polarity>
 void LEDDisplay<Polarity>::showMode(LEDDisplay<Polarity>::Mode mode, bool saving) {
+  showError(-1);
 
   uint8_t mask = ModeMasks[static_cast<size_t>(mode)];
   if (saving) {
@@ -116,23 +141,75 @@ void LEDDisplay<Polarity>::showMode(LEDDisplay<Polarity>::Mode mode, bool saving
     if (mode == Mode::Heat) mask = MaskHeatSave;
   }
 
-  turnOnMask(mask);
+  ledTurnOnMask(mask);
 }
 
 template<ActivePolarity Polarity>
 void LEDDisplay<Polarity>::showError(int errorNo) {
-  for (auto& p : errorPatterns) {
-    if (p.errorNo == errorNo) {
-      for (int i = 0; i < p.blinks; i++) {
-        writeLed(p.ledPin, LedState::ledOn);
-        delay(blinkDelay);
-        writeLed(p.ledPin, LedState::ledOff);
-        delay(blinkDelay);
-      }
+  ledTurnOnMask(allLedOffMask);
+  if (esp_timer_is_active(errorData.blinkTimer)) esp_timer_stop(errorData.blinkTimer);
 
-      delay(errorDelay);
-      return;
+  if (errorNo < 0 && errorData.totalBlinks > 0) {
+    errorData.totalBlinks = 0;
+    errorData.blinkCount = 0;
+    errorData.errorLedState = LedState::ledOff;
+    return;
+  }
+
+  errorData.totalBlinks = (errorNo % 10) + 1;
+  errorData.blinkCount = 0;
+  errorData.errorLedState = LedState::ledOff;
+
+  // to avoid overflow
+  uint8_t idx = errorNo / 10;
+  if (idx >= errorData.errorLedsPins.size()) idx = 0;
+  errorData.errorLed = errorData.errorLedsPins[idx];
+
+  esp_timer_start_once(errorData.blinkTimer, ErrorStruct::LONG_BLINK_DELAY);
+}
+
+template<ActivePolarity Polarity>
+void LEDDisplay<Polarity>::ErrorStruct::blinkCallback(void* arg) {
+  auto* self = static_cast<ErrorStruct*>(arg);
+  
+  Serial.println("Calling handle blink");
+  self->handleBlink();
+}
+
+template<ActivePolarity Polarity>
+void LEDDisplay<Polarity>::ErrorStruct::handleBlink() {
+  if (totalBlinks == 0) return;  // no error active
+
+  errorLedState = (errorLedState == LedState::ledOn)
+                    ? LedState::ledOff
+                    : LedState::ledOn;
+
+  parent->writeLed(errorLed,
+                   errorLedState);
+
+  if (blinkCount == 0 && errorLedState == LedState::ledOn) {
+    esp_timer_stop(blinkTimer);
+    esp_timer_start_periodic(blinkTimer, ErrorStruct::NORMAL_BLINK_DELAY);
+    return;
+  }
+
+  if (errorLedState == LedState::ledOff) {
+    blinkCount++;
+
+    if (blinkCount >= totalBlinks) {
+      blinkCount = 0;
+      esp_timer_stop(blinkTimer);
+      esp_timer_start_once(blinkTimer, ErrorStruct::LONG_BLINK_DELAY);
     }
+  }
+}
+
+template<ActivePolarity Polarity>
+LEDDisplay<Polarity>::~LEDDisplay() {
+  if (errorData.blinkTimer) {
+    esp_timer_stop(errorData.blinkTimer);    // ensure stopped
+    esp_timer_delete(errorData.blinkTimer);  // free resources
+    errorData.blinkTimer = nullptr;
   }
 }
 
